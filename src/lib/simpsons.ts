@@ -10,22 +10,33 @@ const FETCH_CONCURRENCY = 6;
 export type Character = {
   id: number;
   name: string;
+  age: number | null;
+  birthdate: string | null;
+  gender: string | null;
   occupation: string | null;
   status: string | null;
+  phrases: string[];
   imageUrl: string | null;
 };
 
 type ApiCharacter = {
   id: number;
   name: string;
+  age?: number | null;
+  birthdate?: string | null;
+  gender?: string | null;
   occupation?: string | null;
   status?: string | null;
+  phrases?: string[] | null;
   portrait_path?: string | null;
 };
 
 type ApiPage = { count: number; pages: number; results: ApiCharacter[] };
 
-type CacheFile = { fetchedAt: number; characters: Character[] };
+// Bump when the cached record shape changes so an older file is refetched.
+const CACHE_VERSION = 2;
+
+type CacheFile = { version: number; fetchedAt: number; characters: Character[] };
 
 type CacheState = {
   data: CacheFile | null;
@@ -48,8 +59,12 @@ function toCharacter(c: ApiCharacter): Character {
   return {
     id: c.id,
     name: c.name,
+    age: typeof c.age === "number" ? c.age : null,
+    birthdate: c.birthdate || null,
+    gender: c.gender || null,
     occupation: c.occupation || null,
     status: c.status || null,
+    phrases: Array.isArray(c.phrases) ? c.phrases.filter((p) => typeof p === "string" && p.trim()) : [],
     imageUrl: c.portrait_path ? `${CDN_BASE}${c.portrait_path}` : null,
   };
 }
@@ -82,13 +97,15 @@ async function fetchAllCharacters(): Promise<CacheFile> {
   const byId = new Map<number, Character>();
   for (const c of results.flat()) byId.set(c.id, toCharacter(c));
   const characters = [...byId.values()].sort((a, b) => a.id - b.id);
-  return { fetchedAt: Date.now(), characters };
+  return { version: CACHE_VERSION, fetchedAt: Date.now(), characters };
 }
 
 async function readCacheFile(): Promise<CacheFile | null> {
   try {
     const parsed = JSON.parse(await fs.readFile(/*turbopackIgnore: true*/ cachePath(), "utf8")) as CacheFile;
-    return Array.isArray(parsed.characters) && parsed.characters.length > 0 ? parsed : null;
+    return parsed.version === CACHE_VERSION && Array.isArray(parsed.characters) && parsed.characters.length > 0
+      ? parsed
+      : null;
   } catch {
     return null;
   }
@@ -120,9 +137,13 @@ function refresh(): Promise<CacheFile> {
  * Full character list from memory, then the JSON file cache, then the API.
  * Stale data is served immediately while a background refresh runs.
  */
+function isCurrent(data: CacheFile | null): data is CacheFile {
+  return !!data && data.version === CACHE_VERSION && data.characters.length > 0;
+}
+
 export async function getAllCharacters(): Promise<Character[]> {
-  if (!state.data) state.data = await readCacheFile();
-  if (!state.data) return (await refresh()).characters;
+  if (!isCurrent(state.data)) state.data = await readCacheFile();
+  if (!isCurrent(state.data)) return (await refresh()).characters;
 
   if (Date.now() - state.data.fetchedAt > ttlMs()) {
     refresh().catch((err) => console.error("[simpsons] background refresh failed", err));
@@ -132,4 +153,16 @@ export async function getAllCharacters(): Promise<Character[]> {
 
 export async function getCharacterMap(): Promise<Map<number, Character>> {
   return new Map((await getAllCharacters()).map((c) => [c.id, c]));
+}
+
+/** Cached list record when we have it; otherwise the per-character detail endpoint. */
+export async function getCharacter(id: number): Promise<Character | null> {
+  const cached = (await getCharacterMap()).get(id);
+  if (cached) return cached;
+
+  const res = await fetch(`${API_BASE}/characters/${id}`, { cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Character ${id} detail failed: HTTP ${res.status}`);
+  const body = (await res.json()) as ApiCharacter;
+  return body && typeof body.id === "number" ? toCharacter(body) : null;
 }

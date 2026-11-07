@@ -1,7 +1,7 @@
 import "server-only";
 import { eq, or } from "drizzle-orm";
 import { getDb, schema } from "@/db";
-import { getAllCharacters, getCharacterMap, type Character } from "./simpsons";
+import { getAllCharacters, getCharacter, getCharacterMap, type Character } from "./simpsons";
 
 export type ClaimInfo = { userId: number; displayName: string; claimedAt: number };
 export type CharacterWithClaim = Character & { claim: ClaimInfo | null };
@@ -55,11 +55,20 @@ export async function getUserClaim(userId: number): Promise<CharacterWithClaim |
   const character = (await getCharacterMap()).get(row.characterId) ?? {
     id: row.characterId,
     name: `Character #${row.characterId}`,
+    age: null,
+    birthdate: null,
+    gender: null,
     occupation: null,
     status: null,
+    phrases: [],
     imageUrl: null,
   };
   return withClaims([character])[0];
+}
+
+export async function getCharacterWithClaim(id: number): Promise<CharacterWithClaim | null> {
+  const character = await getCharacter(id);
+  return character ? withClaims([character])[0] : null;
 }
 
 export class ClaimError extends Error {

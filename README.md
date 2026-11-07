@@ -1,6 +1,6 @@
 # Simpsons Picker
 
-Pick a Simpsons character and save your selection. Each user can hold one character; once it's claimed, everyone else sees it as **Taken by {display name}**. Only admins can release or reassign a claim.
+Pick a Simpsons character and save your selection. Each user can hold one character; once it's claimed, everyone else sees it as **Taken by {display name}**. Only admins can release or reassign a claim, or manage users.
 
 Character data comes from [The Simpsons API](https://thesimpsonsapi.com) (about 1,180 characters).
 
@@ -38,8 +38,13 @@ On first boot the app creates an admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` (di
 
 Log in with those credentials and open **Admin** in the header to:
 
+- create a user (email, display name, password, and role `user` or `admin`),
+- promote or demote a user (the last remaining admin cannot be demoted),
+- remove a user, which also releases their claim (you cannot remove yourself or the last remaining admin),
 - release any claim, and
 - assign a character to a user. This removes the user's current claim and the character's current owner, if any.
+
+Click a character in the carousel or search results to open `/characters/[id]`, with the portrait, age, birthdate, gender, occupation, status, phrases, and the same claim rules as the cards.
 
 ## Configuration (`.env.local`)
 
@@ -66,6 +71,9 @@ To reset everything, stop the server and delete the `data/` folder.
 | GET / POST | `/api/claims` | user | Your claim / claim `{ characterId }` (one per user) |
 | GET / POST | `/api/admin/claims` | admin | List claims and users / force-assign `{ userId, characterId }` |
 | DELETE | `/api/admin/claims/:characterId` | admin | Release a claim |
+| POST | `/api/admin/users` | admin | Create `{ email, displayName, password, role }` |
+| PATCH | `/api/admin/users/:id` | admin | Set `{ role }` (`user` or `admin`) |
+| DELETE | `/api/admin/users/:id` | admin | Remove a user and release their claim |
 
 Mutating endpoints only accept same-origin `application/json` requests.
 

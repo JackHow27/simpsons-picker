@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { postJson, type ClientCharacter } from "@/lib/types";
 
@@ -22,7 +23,9 @@ type AdminUser = {
   characterName: string | null;
 };
 
-export default function AdminPanel() {
+type NewUser = { email: string; displayName: string; password: string; role: "user" | "admin" };
+
+export default function AdminPanel({ currentUserId }: { currentUserId: number }) {
   const [data, setData] = useState<{ claims: AdminClaim[]; users: AdminUser[] } | null>(null);
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -52,6 +55,62 @@ export default function AdminPanel() {
     }
   }
 
+  async function createUser(input: NewUser) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await postJson("/api/admin/users", input);
+      setMessage({ kind: "success", text: `Created ${input.displayName.trim()}.` });
+      return true;
+    } catch (err) {
+      setMessage({ kind: "error", text: (err as Error).message });
+      return false;
+    } finally {
+      setBusy(false);
+      load();
+    }
+  }
+
+  async function toggleRole(user: AdminUser) {
+    const role = user.role === "admin" ? "user" : "admin";
+    if (role === "user" && !window.confirm(`Make ${user.displayName} a regular user?`)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await postJson(`/api/admin/users/${user.id}`, { role }, "PATCH");
+      setMessage({
+        kind: "success",
+        text: role === "admin" ? `${user.displayName} is now an admin.` : `${user.displayName} is now a regular user.`,
+      });
+    } catch (err) {
+      setMessage({ kind: "error", text: (err as Error).message });
+    } finally {
+      setBusy(false);
+      load();
+    }
+  }
+
+  async function removeUser(user: AdminUser) {
+    const claimNote = user.characterName ? ` Their claim on ${user.characterName} will be released.` : "";
+    if (!window.confirm(`Remove ${user.displayName}?${claimNote}`)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await postJson(`/api/admin/users/${user.id}`, undefined, "DELETE");
+      setMessage({
+        kind: "success",
+        text: user.characterName
+          ? `Removed ${user.displayName}. ${user.characterName} is available again.`
+          : `Removed ${user.displayName}.`,
+      });
+    } catch (err) {
+      setMessage({ kind: "error", text: (err as Error).message });
+    } finally {
+      setBusy(false);
+      load();
+    }
+  }
+
   async function assign(user: AdminUser, character: ClientCharacter) {
     setBusy(true);
     try {
@@ -68,7 +127,10 @@ export default function AdminPanel() {
   return (
     <div className="admin">
       <h1>Admin</h1>
-      <p className="muted">Release any claim, or assign a character to a user. Assigning overrides existing claims on either side.</p>
+      <p className="muted">
+        Create and remove users, change who is an admin, release any claim, or assign a character. Assigning overrides
+        existing claims on either side. Removing a user releases their claim.
+      </p>
       {message && (
         <p className={`alert alert-${message.kind}`} role="status">
           {message.text}
@@ -78,6 +140,7 @@ export default function AdminPanel() {
         <p className="muted">Loading…</p>
       ) : (
         <>
+          <CreateUserForm busy={busy} onCreate={createUser} />
           <AssignForm users={data.users} busy={busy} onAssign={assign} />
 
           <section className="card">
@@ -85,6 +148,7 @@ export default function AdminPanel() {
             {data.claims.length === 0 ? (
               <p className="muted">No characters have been claimed yet.</p>
             ) : (
+              <div className="table-wrap">
               <table className="table">
                 <thead>
                   <tr>
@@ -101,7 +165,7 @@ export default function AdminPanel() {
                         {c.imageUrl && (
                           <img src={c.imageUrl} alt="" />
                         )}
-                        {c.characterName}
+                        <Link href={`/characters/${c.characterId}`}>{c.characterName}</Link>
                       </td>
                       <td>
                         {c.displayName} <span className="muted small">{c.email}</span>
@@ -116,11 +180,13 @@ export default function AdminPanel() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </section>
 
           <section className="card">
             <h2>Users ({data.users.length})</h2>
+            <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
@@ -128,23 +194,110 @@ export default function AdminPanel() {
                   <th>Email</th>
                   <th>Role</th>
                   <th>Character</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
-                {data.users.map((u) => (
-                  <tr key={u.id}>
-                    <td>{u.displayName}</td>
-                    <td className="muted">{u.email}</td>
-                    <td>{u.role === "admin" ? <span className="badge badge-mine">admin</span> : "user"}</td>
-                    <td>{u.characterName ?? <span className="muted">none</span>}</td>
-                  </tr>
-                ))}
+                {data.users.map((u) => {
+                  const lastAdmin = u.role === "admin" && data.users.filter((x) => x.role === "admin").length <= 1;
+                  const isSelf = u.id === currentUserId;
+                  return (
+                    <tr key={u.id} data-testid={`user-row-${u.id}`}>
+                      <td>{u.displayName}</td>
+                      <td className="muted">{u.email}</td>
+                      <td>{u.role === "admin" ? <span className="badge badge-mine">admin</span> : "user"}</td>
+                      <td>
+                        {u.characterId ? (
+                          <Link href={`/characters/${u.characterId}`}>{u.characterName}</Link>
+                        ) : (
+                          <span className="muted">none</span>
+                        )}
+                      </td>
+                      <td className="row-actions">
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          disabled={busy || lastAdmin}
+                          title={lastAdmin ? "Can't demote the last admin." : undefined}
+                          onClick={() => toggleRole(u)}
+                        >
+                          {u.role === "admin" ? "Make user" : "Make admin"}
+                        </button>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          disabled={busy || isSelf || lastAdmin}
+                          title={
+                            isSelf ? "You can't remove your own account." : lastAdmin ? "Can't remove the last admin." : undefined
+                          }
+                          onClick={() => removeUser(u)}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+            </div>
           </section>
         </>
       )}
     </div>
+  );
+}
+
+function CreateUserForm({ busy, onCreate }: { busy: boolean; onCreate: (input: NewUser) => Promise<boolean> }) {
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<"user" | "admin">("user");
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const ok = await onCreate({ email, displayName, password, role });
+    if (ok) {
+      setDisplayName("");
+      setEmail("");
+      setPassword("");
+      setRole("user");
+    }
+  }
+
+  return (
+    <section className="card">
+      <h2>Add a user</h2>
+      <form className="create-user-form" onSubmit={submit} data-testid="create-user">
+        <label>
+          Display name
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={40} />
+        </label>
+        <label>
+          Email
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required aria-label="New user email" />
+        </label>
+        <label>
+          Password
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={8}
+            aria-label="New user password"
+          />
+        </label>
+        <label>
+          Role
+          <select value={role} onChange={(e) => setRole(e.target.value as "user" | "admin")} aria-label="New user role">
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+        <button className="btn btn-primary" disabled={busy}>
+          Create
+        </button>
+      </form>
+    </section>
   );
 }
 
